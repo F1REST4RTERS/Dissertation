@@ -1,0 +1,722 @@
+---
+title: "Index"
+author: "EKR"
+date: "`r Sys.Date()`"
+output:
+  word_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+
+library(tidyverse)    #data wrangling package
+library(readxl)       #importing excel based dataframe
+library(plotly)       #graphical package
+library(epiDisplay)   #graphical package
+library(kableExtra)   #graphical package
+library(apaTables)    #graphical package
+library(ggplot2)      #graphical package
+library(papaja)       #graphical package
+library(pwr)          #analysis package
+library(psych)        #analysis package
+library(MASS)         #analysis package
+library(AER)          #analysis package
+library(gvlma)        #analysis package
+library(lmtest)       #analysis package
+library(sandwich)     #analysis package
+library(pscl)         #analysis package
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+```{r include=FALSE}
+#Making Codebook:
+
+Codebook <- data.frame(
+  Object = c("DSR","DS", "DSC", "DSC2", "PGDS", "EX_DUR", "EX_NA", "ATT", "Missed", "lmPMPG 1-3",
+             "lmSMPG 1-3", "LMPMER", "nbPGPM", "PGEROSPM", "PGEROSSMmed", "PGEROSPMmed", "PGMO",
+             "PGSIfreq", "PGSItab", "Powertable", "SMPGEROS", "SMPGMOD", "sexfreq"),
+  
+  Description = c("Unwrangled dataset", "Wrangling dataset", "Wrangled dataset", "Dataset conatining transformed PM and PGSI variables as default for nicer graphs", "Dataset containing just indicated problem gamblers", "cases removed for imporobably fast completion", "cases removed for missing data", "Attention check scores", "dataset of cases with missing values", "linear models: PM~PGSI", "linear models: SM~PGSI", "linear model: PM~EROS", "negative binomial regression: PGSI~PM", "multiple regression PM~PGSI+EROS", "mediation regression SM~PGSI+(EROS)", "mediation regression PM~PGSI+(EROS)", "moderation model: SM~PGSI*GP", "Frequency table: PGSI", "PGSI histogram","power analyses", "multiple regression: SM~PGSI+EROS", "moderation regression: SM~PGSI*GP","Frequency table: Sex"))
+
+`Variable Codebook` <- data.frame(
+  Variable = c("sex", "gender", "age", "ethnicity", "GF", "PM", "SM", "PGSI", "PMtrans",
+               "PGSItrans"),
+  Description = c("sex", "gender", "age", "ethnicity", "Gambling frequency (Days gambled on average per 28 day month)", "Presence of meaning", "Search for meaning", "Gambling severity", "square root transformed scores for Presence of meaning", "square root transformed scores for PGSI")) 
+```
+
+```{r Data Wrangling, include=FALSE}
+##Import & Assess Raw Dataset (DSR)
+DSR <- read_excel("Excel_ Anonymised_August 8, 2023_08.17.xlsx")
+#View(DSR)
+#glimpse(DSR)
+
+#############################################################################################
+##Double Check 100% completion for all data:
+
+#prog_check <- DSR %>% filter(Progress ==100)
+#view(prog_check)
+
+##This has been hashed out to reduce clutter. All 200 datapoints were retained, indicating 100% completion.
+
+#############################################################################################
+
+##Remove irrelevant columns: eg. default unused prolific measures such as participant name etc.
+DS <- dplyr::select(DSR, -c(StartDate, EndDate, Status, Progress, Finished, RecordedDate, ResponseId, RecipientLastName, RecipientFirstName, RecipientEmail, ExternalReference, DistributionChannel, UserLanguage, Q14, PROLIFIC_PID))
+
+#############################################################################################
+
+##Exclusion of nonrelevant/non-usable data: 
+
+#Testing for duration outliers via box plot:
+boxplot(DSR$`Duration (in seconds)`)
+
+#Excluding data with improbably fast completion times for accurate response (<2 minutes):
+
+#Retaining excluded data as isolated dataset: 
+EX_DUR <- DS %>% filter(`Duration (in seconds)`<120)  
+#view(EX_DUR)
+#Excluding data:
+DS <- DS %>%filter(`Duration (in seconds)`>=120)  
+
+#Assessing missing data: 
+Missed <- DS %>% filter(rowSums(is.na(.)) > 0)
+
+#15 datapoints contain missing data; of which, 13 NA's are for a non-required response, prior to consent, thus NA's are not of concern. The 2 additional NA's are from a question utilizing a slider input method. This question was set to optional in order to determine whther selection of the defualt value (28) was actively chosen or left as the default value.
+
+#excluding data with missing data (not including the 13 entries detailed above):
+
+#retaining excluded variables:
+EX_NA <- DS %>% filter(is.na(Q10_4))
+#view(EX_NA)
+
+#excluding above variables:
+DS <- DS %>% filter(complete.cases(Q10_4))
+
+##This dataset contains 3 attention checks requesting a specific answer. Data will be excluded if at least 2/3 attention checks fail:
+
+#Assessing attention check columns:
+ATT <- DS %>% dplyr::select(`MLQ#1_7`,`Q11_6`,`Q13_9`)
+#view(ATT)
+
+#retaining excluded variables: 
+
+##No datapoints failed to correctly answer 2/3 attention checks, thus no data is excluded. The code to check for failed attention criteria is demonstrated below (hashed out) for replication purposes:  
+
+#EX_ATT <- DS %>% filter( 
+    #(`MLQ#1_7` != 2 & `Q11_6` != 4) |
+    #(`MLQ#1_7` != 2 & `Q13_9` != 1) |
+    #(`Q11_6` != 4 & `Q13_9` != 1))
+#view(EX_ATT)
+
+#############################################################################################
+
+##Removing more columns - post data exclusion: 
+DS <- DS %>% dplyr::select(-c(`Duration (in seconds)`, Q12_1, `MLQ#1_7`, Q11_6, Q13_9))
+
+#############################################################################################
+
+##Scoring:
+
+##MLQ:
+#reversing Score for MLQ question 9 
+DS <- DS %>% mutate(`MLQ#1_10` = 8 - `MLQ#1_10`)
+
+#summing Q's 1, 4, 5, 6, & 9R to create score for Presence of Meaning (PM):
+#(column numbers and question numbers do not align as attention check was placed at MLQ#1_7)
+DS <- DS %>% mutate(PM = `MLQ#1_1`+ `MLQ#1_4` +`MLQ#1_5`+`MLQ#1_6`+`MLQ#1_10`)
+#summing Q's 2, 3, 7, 8, & 10 to create score for Search for Meaning (SM)
+DS <- DS %>% mutate(SM = `MLQ#1_2`+ `MLQ#1_3` +`MLQ#1_8`+`MLQ#1_9`+`MLQ#1_11`)
+
+#############################################################################################
+
+#PGSI:
+DS <- DS %>% mutate(PGSI = `Q4_1` + `Q4_2` + `Q4_3` + `Q4_4` + `Q4_5` + `Q4_6` + `Q4_7` + `Q4_8` + `Q4_9`)
+
+#############################################################################################
+
+#EROS:
+#reverse scoring items:
+DS <- DS %>% mutate(Q11_2...50 = 5 - Q11_2...50)
+DS <- DS %>% mutate(Q11_5 = 5 - Q11_5)
+DS <- DS %>% mutate(Q11_7 = 5 - Q11_7)
+DS <- DS %>% mutate(Q11_8 = 5 - Q11_8)
+DS <- DS %>% mutate(Q11_10 = 5 - Q11_10)
+
+#Summing all questions for total EROS score:
+DS <- DS %>% mutate(EROS = Q11_1...49 + Q11_2...50 + Q11_3 + Q11_4 + Q11_5 + Q11_7 + Q11_8 + Q11_9 + Q11_10 + Q11_11)
+
+#############################################################################################
+
+#GPQ:
+#This scale uses a convoluted scoring system to categorize responses into 3 distinct groups:
+
+#Summing subscale items:
+DS <- DS %>% mutate(`1A` = Q11_1...66 + Q11_2...67)
+DS <- DS %>% mutate(`2A` = Q13_1...68 + Q13_2...69)
+DS <- DS %>% mutate(`4A` = Q5_6 + Q13_3 + Q13_8 + Q13_10)
+DS <- DS %>% mutate(`1B` = Q13_5 + Q13_12)
+DS <- DS %>% mutate(`2B` = Q5_2...61 + Q5_4 + Q13_6)
+DS <- DS %>% mutate(`1C` = Q5_1...60 + Q5_3 + Q13_2...71 + Q13_7)
+DS <- DS %>% mutate(`3C` = Q5_5 + Q13_1...70 + Q13_4 + Q13_11 + Q13_13)
+
+#Scoring via subscale scores:
+#creating Pathway 2 score column:
+DS <- DS %>%
+  mutate(Pathway_2_Score = 
+           as.integer(`1A` >= 6) + 
+           as.integer(`2A` >= 9) + 
+           as.integer(`4A` >= 20) + 
+           as.integer(`1B` >= 9) + 
+           as.integer(`2B` >= 13))
+#Creating Pathway 3 Score column:
+DS <- DS %>%
+  mutate(Pathway_3_Score = 
+           as.integer(`1B` >= 9) + 
+           as.integer(`2B` >= 13) + 
+           as.integer(`1C` >= 8) + 
+           as.integer(`1C` >= 15) - 
+           as.integer(`1A` >= 6))
+#using the above code can lead to scores of -1. As these scores are used for threshold scoring (eg. if number is >=6), changing -1 to 0 will make analysis easier without interfering with results:
+DS <- DS %>%
+  mutate(Pathway_3_Score = ifelse(Pathway_3_Score == -1, 0, Pathway_3_Score))
+
+#############################################################################################
+
+#Combining the complex criteria to form the final categorization:
+DS <- DS %>% mutate(`Gambling Pathway` = case_when(
+      Pathway_2_Score >= 3 & Pathway_3_Score < 2 ~ 2,
+      Pathway_2_Score >= 3 & Pathway_3_Score >= 2 ~ 3,
+      Pathway_3_Score >= 2 ~ 3,
+      TRUE ~ 1))
+
+#############################################################################################
+
+#Making clean dataset with Demographics, PM, SM, PGSI, EROS, & Pathway scores.
+DSC <- DS %>% dplyr::select(`Q5_1...24`, `Q5_2...25`, Q8, Q9, Q10_4, PM, SM, PGSI, EROS, `Gambling Pathway`)
+
+#renaming demographic columns for clarity:
+
+DSC <- DSC %>% rename(
+  `Sex` = `Q5_1...24`,
+  `Gender` = `Q5_2...25`,
+  `Age` = `Q8`,
+  `Ethnicity` = `Q9`,
+  `GF` = `Q10_4`,
+  `GP` = `Gambling Pathway`)
+
+#############################################################################################
+
+#transforming categorical data from numerical to cetegorical:
+DSC$Category[DSC$GP == 1] = "1"
+DSC$Category[DSC$GP == 2] = "2"
+DSC$Category[DSC$GP == 3] = "3"
+DSC$GP = factor(DSC$Category,
+                    levels=c("1", "2", "3"))
+
+#############################################################################################
+
+#transforming categorical data from numerical to categorical:
+DSC$Category[DSC$Sex == 1] = "Male"
+DSC$Category[DSC$Sex == 2] = "Female"
+DSC$Category[DSC$Sex == 3] = "Non-Binary"
+DSC$Category[DSC$Sex == 4] = "Prefer not to say"
+DSC$Sex = factor(DSC$Category,
+                    levels=c("Male", "Female", "Non-Binary", "Prefer not to say"))
+
+#############################################################################################
+
+DSC$Category[DSC$Gender == 1] = "Male"
+DSC$Category[DSC$Gender == 2] = "Female"
+DSC$Category[DSC$Gender == 3] = "Non-Binary"
+DSC$Category[DSC$Gender == 4] = "Prefer not to say"
+DSC$Gender = factor(DSC$Category,
+                    levels=c("Male", "Female", "Non-Binary", "Prefer not to say"))
+
+#############################################################################################
+
+DSC$Category[DSC$Ethnicity == 1] = "White/White British"
+DSC$Category[DSC$Ethnicity == 2] = "Asian/Asian British"
+DSC$Category[DSC$Ethnicity == 3] = "Black, Black British, Caribbean, African"
+DSC$Category[DSC$Ethnicity == 4 | DSC$Ethnicity >= 6] = "Mixed or multiple ethnic groups"
+DSC$Category[DSC$Ethnicity == 5] = "Other ethnic group"
+DSC$Ethnicity = factor(DSC$Category,
+                    levels=c("White/White British", "Asian/Asian British", "Black British, Caribbean, African", "Mixed or multiple ethnic groups", "Other ethnic group"))
+
+#removing "category" column post use:
+DSC <- subset(DSC, select = -c(Category))
+
+#############################################################################################
+
+#adding reflected data values for predictors:
+
+DSC$PMR <- 36-DSC$PM                  #PM reflected in Y axis, transforming -ve skew to +ve
+DSC$sqPMR <- sqrt(DSC$PMR)            #square root transformation of new variable
+DSC$sqPMunref <- DSC$sqPMR - 6        #reversing reflection (values are now -ve)
+DSC$PMtrans <-  sqrt(DSC$sqPMunref^2) #negating values back to +ve completing PM                                                  transformation.
+DSC <- subset(DSC, select = -c(PMR,sqPMR, sqPMunref) ) #removing transitional columns
+
+DSC$PGSItrans <- sqrt(DSC$PGSI) #Creating PGSI varaible with square root transformation
+
+#############################################################################################
+
+#Saving clean dataset (DSC) in case of spontaneous code issues in the code above:
+saveRDS(DSC, file = "DSC.Rds")
+
+#head(DSC)
+
+#Creating dataset for just problem gamblers (PGSI > 7): 
+PGDS <- DSC %>% filter(PGSI >7)
+
+#Creating dataset for just non-problem gamblers (PGSI <8)
+
+NPGDS <- DSC %>% filter(PGSI <8)
+```
+Descriptive statistics:
+
+Of the 204 potential participants, 195 participant scores were retained. Whilst no cases failed more than 1 of 3 attention checks required for removal, 5 cases were removed due to questionnaire completion times deemed improbably quick for accurate response (<2 minutes). Additionally 4 potential participants withdrew prior to questionnaire completion. As participant drop out rate was 2%, sample representation concerns were mitigated.
+Post exclusion, the sample consisted of 145 (76%) males. Participant age ranged from 18-69 with slight positive skew (Median: 38). 163 participants (84%) scored as non-problem gamblers via PGSI (scores below 8), indicating adequate population representation.
+
+```{r message=FALSE, warning=FALSE, paged.print=FALSE, results='asis'}
+sexfreq <- data.frame(
+  Sex = c("Male", "Female", "Non-Binary", "Prefer not to say", "Total"),
+  Frequency = c(145, 49, 0, 1, 195),
+  Percent = c(74.4, 25.1, 0.0, 0.5, 100.0),
+  'Cumulative Percent' = c(74.4, 99.5, 99.5, 100.0, 100.0))
+
+apasexfreq <- papaja::apa_table(sexfreq, caption = "Cumulative Frequency Table: Participant Sex")
+
+cat(apasexfreq)
+```
+
+```{r}
+#tab1(DSC$Sex, sort.group = FALSE, cum.percent = TRUE, graph = FALSE)
+hist(DSC$Age, main = "Histogram: Age distribution", xlab = "Age (Median:38)")
+```
+
+```{r}
+PGSItab <- tab1(DSC$PGSI, sort.group = FALSE, cum.percent = TRUE, main = "PGSI Score Distribution", col = "grey")
+#tab1(DSC$PGSI, sort.group = FALSE, cum.percent = TRUE, graph = FALSE)
+```
+
+```{r results='asis', echo=FALSE}
+PGSIfreq <- data.frame(
+  PGSI = c(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27),
+  Frequency = c(59, 30, 23, 16, 9, 11, 11, 4, 6, 6, 3, 1, 4, 2, 1, 0, 1, 0, 2, 2, 1, 0, 0, 0, 1, 0, 0, 2),
+  Percent = c(30.3, 15.4, 11.8, 8.2, 4.6, 5.6, 5.6, 2.1, 3.1, 3.1, 1.5, 0.5, 2.1, 1.0, 0.5, 0, 0.5, 0, 1.0, 1.0, 0.5, 0, 0, 0, 0.5, 0, 0, 1.0),
+  CumulativePercent = c(30.3, 45.6, 57.4, 65.6, 70.3, 75.9, 81.5, 83.6, 86.7, 89.7, 91.3, 91.8, 93.8, 94.9, 95.4, 95.4, 95.9, 95.9, 96.9, 97.9, 98.5, 98.5, 98.5, 98.5, 99.0, 99.0, 99.0, 100.0))
+
+apaPGSIfreq <- apa_table(PGSIfreq, caption = "Frequency Table: Gambling Severity", note = "PGSI: Problem Gambling Severity Index. Scores >8 are indiciative of clincial problem gambling (16.4% of sample).")
+
+cat(apaPGSIfreq)
+```
+
+```{r include=FALSE}
+pwr.f2.test(u = 2, v = 192, f2 =.5, sig.level = .05, power = NULL) #linear reg moderate effect
+pwr.f2.test(u = 2, v = 192, f2 =.2, sig.level = .05, power = NULL) #linear reg small effect
+pwr.f2.test(u = 3, v = 191, f2 =.5, sig.level = .05, power = NULL) #multiple reg moderate effect
+pwr.f2.test(u = 3, v = 191, f2 =.2, sig.level = .05, power = NULL) #multiple reg small effect
+```
+
+```{r}
+#creating table for predictive power
+Powertable <- data.frame(
+  Analysis = c("Linear Regression", "  ", "Multiple Regression", "  "),
+  `Cohen's D` = c("0.5", "0.2", "0.5", "0.2"),
+  Alpha = c("0.05", "0.05", "0.05", "0.05"),
+  Power = c("1*", "1*", "1*", "1*"))
+
+apapowertable <- papaja::apa_table(Powertable, caption = "Fig. X: Power Analyses", note = "* = Above threshold for adequate predictive power (.80). Cohens' D values of .5 and .2 are indicative of moderate and small effect size, respectively. Analyses were performed utlising a sample of 195.")
+```
+
+Post sample power analysis was calculated to determine predictive power for a sample of 195 for linear regression and multiple regression analyses. Using both small and moderate Cohens' D effect size values (Lee, 2016) , based upon established literature (Zhang et al., 2020, ), strong predictive power was determined for all analyses:
+
+```{r message=FALSE, warning=FALSE, paged.print=FALSE, results='asis'}
+cat(apapowertable)
+```
+
+```{r}
+#Distributions:
+
+hist(DSC$PM, 
+     main = "Histogram: Presence of Meaning (PM)",
+     xlab = "PM")                                     #indicates negative skew.
+hist(DSC$SM,
+     main = "Histogram: Search for Meaning (SM)",
+     xlab = "SM")                                     #indicates negative skew.
+```
+
+```{r include=FALSE}
+ks.test(DSC$PM, pnorm)                                #confirms negative skew.
+ks.test(DSC$SM, pnorm)                                #confirms negative skew.
+```
+
+Histograms for PM and SM indicated non-parametric distribution via negative skew. Due to the sample size exceeding 50,the Kolmogorov-Smirnov test was utilized (Yazici & Yolacan, 2007), confirming visual indications (D=1, p<.001).
+
+Hypothesis 1: Associations between meaning variables (presence of meaning and meaning seeking) and gambling severity (PGSI):
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+#PM negative association to PGSI?
+#scatterplot(PM ~ PGSI, data = DSC, col= "black", xlab = "Gambling Severity", ylab = "Presence of Meaning", legend = TRUE)
+
+#creating visual scatterplot: PM and PGSI
+par(mfrow=c(2,2))
+ggplot(DSC, aes(x = PGSI, y = PM))+
+  geom_point()+
+  geom_smooth(method = "lm", col = "black") +
+  labs(title = "Scatterplot: PM-PGSI", x = "Gambling Severity", y = "Presence of Meaning") +
+  theme_apa(box = TRUE)
+```
+
+```{r}
+
+#creating visual scatterplot: PM and PGSI transformed
+ggplot(DSC, aes(x =PGSItrans , y = PMtrans))+
+  geom_point()+
+  geom_smooth(method = "lm", col = "black") +
+  labs(title = "Scatterplot: PM-PGSI - Transformed", x = "Gambling Severity", y = "Presence of Meaning") +
+  theme_apa(box = TRUE)
+```
+
+Scatterplot assessing association between PM and PGSI demonstrates a weak negative association, congruent with existing research. Correlation coefficient confirmed weak negative correlation: r= -0.16. Linear regression analyses were performed as this method is typically robust to skewed data, focusing on residual normality.
+
+```{r include=FALSE}
+lmPMPG <- lm(PM ~ PGSI, data = DSC) #linear model PM by PGSI
+summary(lmPMPG)
+```
+
+Linear model demonstrated significant negative association between gambling severity and PM (F(1, 193)=5.09, p=0.02), with an estimated decrease of 0.24 units in gambling severity per unit increase in PM. However, PM only accounted for 2.6% of vaiance explained (Adj r2:.021) indicating poor model fit.
+```{r}
+#apa.reg.table(lm(PM ~ PGSI, data = DSC),filename = "testlm.doc",table.number = 4)
+
+#NOTE: The above code creates a .doc file for the regression model in APA style format. Whilst this formatted table must be added manually -post script- the figures included are identical to the output in the chunk above. 
+```
+
+```{r include=FALSE}
+#Checking assumptions:
+par(mfrow=c(2,2))
+plot(lmPMPG)       
+
+gvlma::gvlma(lmPMPG)
+
+mod1assump <- apa_table(data.frame(
+  Test = c("Linearity", "Skewness", "Kurtosis", "Link Function", "Heteroskedasticity"),
+  Value = c("17.95", "12.14", ".28", ".20", "5.32"),
+  p = c(".001*", ".001*", ".59", ".65", ".021*")), caption = "Fig.X: Linear Model Assumption Tests", note = "*= significance of test at level .05. Significance indicates violation of assumption")
+```
+
+```{r message=FALSE, warning=FALSE, paged.print=FALSE, results='asis'}
+cat(mod1assump)
+```
+
+Model diagnostic testing demonstrated violated assumptions for adequate fit, skewness and heteroscedasticity. Residual plots indicated 3 outlying data points. A second linear model was calculated post outlier removal:
+
+```{r include=FALSE}
+lmPMPG2 <- lm(PM ~ PGSI, data = DSC[-c(7, 139, 175), ])
+
+summary(lmPMPG2)
+gvlma(lmPMPG2)
+par(mfrow=c(2,2))
+plot(lmPMPG2)
+
+apa.reg.table(lmPMPG2)
+#apa.reg.table(lmPMPG2, filename = "lmPMPG2.doc", table.number = 5)
+```
+
+```{r }
+mod2assump <- apa_table(data.frame(
+  Test = c("Linearity", "Skewness", "Kurtosis", "Link Function", "Heteroskedasticity"),
+  Value = c("18.69", "13.29", ".096", ".13", "5.16"),
+  p = c(".001*", ".001*", ".76", ".72", ".023*")), caption = "Fig.X: Linear Model Assumption Tests", note = "*= significance of test at level .05. Significance indicates violation of assumption")
+```
+
+```{r message=FALSE, warning=FALSE, paged.print=FALSE, results='asis'}
+cat(mod2assump)
+```
+Assumptions of heteroskedasticity and skew were still violated, thus square root transformation of the dependent variable (Gambling Severity) was performed. Square root transformation was utilized over log transformation due to the presence of 'zero values' within data. Due to presence of negative skew in the predictor variable (PM), Value reflection in the Y-axis was carried out to reflect skew. Positive skew was then transformed via square root to reduce skew, which was then re-reflected in the y axis to create adequately transformed data as recommended via Osborne (2002). Outlying values were reintroduced prior to model testing and transformation. This model demonstrated 3 different outlier variables which were then removed to improve model fit.
+
+```{r include=FALSE}
+lmPMPG3 <- lm(PMtrans ~ sqrt(PGSI), data = DSC[-c(76, 108, 146, 101, 125, 149), ])
+summary(lmPMPG3)
+gvlma(lmPMPG3)
+
+confint(lmPMPG3)
+```
+
+```{r}   
+par(mfrow=c(2,2)) #Diagnostic plots 
+plot(lmPMPG3)
+```
+
+```{r include=FALSE}
+coeftest(lmPMPG3, vcov = vcovHC(lmPMPG3, "HC1"))
+
+apa.reg.table(lmPMPG3)
+#apa.reg.table(lmPMPG3, filename = "PGSIPM.doc",table.number = 5)
+
+#NOTE: The above code creates a .doc file for the regression model in APA style format. Whilst this formatted table must be added manually -post script- the figures included are identical to the output in the chunk above. 
+```
+
+```{r}
+mod3assump <- apa_table(data.frame(
+  Test = c("Linearity", "Skewness", "Kurtosis", "Link Function", "Heteroskedasticity"),
+  Value = c("8.70", ".072", ".82", "2.20", "5.61"),
+  p = c(".069", ".79", ".36", ".13", ".018*")), caption = "Fig.X: Linear Model Assumption Tests", note = "*= significance of test at level .05. Significance indicates violation of assumption")
+```
+
+```{r message=FALSE, warning=FALSE, paged.print=FALSE, results='asis'}
+cat(mod3assump)
+```
+This model met all assumptions sans homoskedasticity. As heteroskedasticity only biases standard error calculations (MacKinnon & White, 1985), heteroskedasticity robust standard errors were calculated. These coefficients demonstrated negligible difference across models, thus indicating negligible consequence from violation of homoskedasticity. Thus, this model was retained. 
+
+```{r}
+whitetest1 <-apa_table(data.frame(
+  ` ` = c("Intercept", "(PGSI)"),
+  Estimate = c("2.85", "-.21"),
+  `Std. Error` = c(".12", ".059"),
+  `t value` = c("23.42", "-3.49"),
+  `Pr(>|t|)` = c(".001***", ".001***")), caption = "heteroskedasticity robust calculation", note ="***= signifcamce at p<.001")   
+```
+
+```{r message=FALSE, warning=FALSE, paged.print=FALSE, results='asis'}
+cat(whitetest1)
+```
+The retained linear model demonstrated significant negative association between gambling severity and PM (t(1,187)=-3.49, p<.001), with an estimated decrease of 0.21 units in gambling severity per unit increase in PM. Whilst, PM only accounted for 6.2% of variance explained (Adj r2:.057), however F statistics demonstrated significant fit (F(1, 187)=12.39, p<.001).
+
+Due to the extreme positive distribution for gambling severity (PGSI), a second model was tested for rigor, utilising PGSI as the dependent variable.  
+
+```{r include=FALSE}
+var(DSC$PM)/mean(DSC$PM)
+
+dispersiontest(glm(PGSI~1, data = DSC, family = poisson), trafo = 1)
+ #indicative of overdispersion, thus negative binary GLM chosen over Poisson GLM.
+```
+Overdispersion was tested for and found to be significant, demonstrating a negative-binomial distribution over poisson. This distribution aligns with expectations as PGSI is scored via frequency of a series of event, thus providing a variant of 'count data' typical of negative binomial distribution.
+
+As such, a negative-binomial regression was carried out. This model demonstrated congruent findings of negative association between PGSI and PM scores (z(1, 194)=-2.53, p=.012) alongside adequate, yet small explanation of variance calculated via null and residual deviance (218.06, 212,47).
+
+AIC values for this model and the proposed linear model were compared to assess best model fit. AIC for the linear model was significantly smaller than the negative binomial model (551.70, 938.33), thus the linear model was favored for additional analysis.
+
+```{r include=FALSE}
+nbPGPM <- glm.nb(PGSI ~ PM, data = DSC)
+summary(nbPGPM)
+
+1 - pchisq(218.06, 194) # = 0.1135529 --- This provides evidence of adequate model fit, as the score is close to 0. Additionally the null deviance of 218.06 is reduced to 212.47 when PM is included as a predictor (via residual variance). Whilst the decrease in variance is small, this indicates that PM does explain some variance. 
+
+AIC(nbPGPM, lmPMPG3)
+```
+
+```{r}
+
+```
+
+SM association to PGSI
+```{r}
+ggplot(DSC, aes(x =PGSI , y = SM))+
+  geom_point()+
+  geom_smooth(method = "lm", col = "black") +
+  labs(title = "Scatterplot: SM-PGSI", x = "Gambling Severity", y = "Search for Meaning") +
+  theme_apa(box = TRUE)
+```
+A weak positive correlation between gambling severity and meaning seeking was indicated via scatterplot.
+```{r include=FALSE}
+lmSMPG <- lm(SM ~ PGSI, data = DSC)
+summary(lmSMPG)
+
+par(mfrow=c(2,2))
+plot(lmSMPG)
+
+gvlma(lmSMPG)    #fails global stat and skew.
+```
+
+```{r}
+smmod1assump <- apa_table(data.frame(
+  Test = c("Linearity", "Skewness", "Kurtosis", "Link Function", "Heteroskedasticity"),
+  Value = c("10.84", "7.61", ".001", "1.58", "1.65"),
+  p = c(".02*", ".005*", ".98", ".21", ".20")), caption = "Fig.X: Linear Model Assumption Tests", note = "*= significance of test at level .05. Significance indicates violation of assumption")
+```
+
+```{r message=FALSE, warning=FALSE, paged.print=FALSE, results='asis'}
+cat(smmod1assump)
+```
+
+```{r include=FALSE}
+lmSMPG2 <- lm(SM ~ sqrt(PGSI), data = DSC)
+summary(lmSMPG2)
+par(mfrow=c(2,2))
+plot(lmSMPG2)
+gvlma(lmSMPG2)  # fails skew
+```
+This was supported via linear regression of meaning seeking and gambling severity. Gambling severity underwent square root transformation to meet skew assumptions.
+```{r include=FALSE}
+lmSMPG3 <- lm(SM ~ PGSItrans, data = DSC[-c(53, 101, 104, 12, 188, 172), ])
+summary(lmSMPG3)
+gvlma(lmSMPG3)
+```
+
+```{r}
+smmod1assump2 <- apa_table(data.frame(
+  Test = c("Linearity", "Skewness", "Kurtosis", "Link Function", "Heteroskedasticity"),
+  Value = c("8.99", "3.80", ".21", ".004", "4.97"),
+  p = c(".06", ".05", ".65", ".95", ".026*")), caption = "Fig.X: Linear Model Assumption Tests", note = "*= significance of test at level .05. Significance indicates violation of assumption")
+```
+
+```{r message=FALSE, warning=FALSE, paged.print=FALSE, results='asis'}
+cat(smmod1assump2)
+```
+
+```{r}
+par(mfrow=c(2,2))
+plot(lmSMPG3) 
+```
+Post regression diagnostics confirmed assumptions for fit, skew, kurtosis and linearity. Homoskedasticity assumptions were violated, however heteroskedasticity only biases standard error calculations, thus robust standards errors were calculated.     
+```{r include=FALSE}
+coeftest(lmSMPG3, vcov = vcovHC(lmSMPG3, "HC1"))
+confint(lmSMPG3)
+
+apa.reg.table(lmSMPG3)
+#apa.reg.table(lmSMPG3, filename = "PGSISM.doc",table.number = 6)
+```
+
+```{r}
+whitetest2 <-apa_table(data.frame(
+  ` ` = c("Intercept", "(PGSI)"),
+  Estimate = c("22.28", ".90"),
+  `Std. Error` = c(".67", ".31"),
+  `t value` = c("33.16", "2.93"),
+  `p` = c(".001***", ".001***")), caption = "heteroskedasticity robust calculation", note ="***= signifcance at p<.001, **= signifcamce at p<.01")   
+```
+
+```{r message=FALSE, warning=FALSE, paged.print=FALSE, results='asis'}
+cat(whitetest2)
+```
+##INSERT PGSISM.doc HERE##
+
+This model demonstrated significant positive association between PGSI and SM (t(1, 187)= 2.93, p<.01) with a unit increase of .90 for SM per unit increase in PGSI. The model demonstrated adequate model fit (F(1, 187=7.3), p<.01). However this only accounted for 3.8% of variance explained indicating influence of uncontrolled variables on SM scores, as supported via significance of the intercept (t(1, 187)=33.16, p<.001). 
+
+Hypothesis 2: Moderation effects of gambling pathway.
+
+Assessment of gambling pathway frequencies demonstrated extreme under-representation for P2 (2.56%) and limited representation for P3 (10.26%):
+
+```{r}
+ 
+tab1(DSC$GP, sort.group = FALSE, cum.percent = TRUE, col = "grey", xlab = "Gambling Pathway", ylab = "Frequency", main = "Frequency Plot: Gambling pathway")
+
+#Limiting sample to just problem gamblers demonstrates similar, yet less extreme results.
+tab1(PGDS$GP, sort.group = FALSE, cum.percent = TRUE, col = "grey", xlab = "Gambling Pathway", ylab = "Frequency", main = "Frequency Plot: Gambling pathway for Problem Gamblers")
+```
+As the gambling pathways questionnaire is specifically designed to categorize problem gamblers, this under representation could be a result of using a general gambling population. Therefore frequency plots were recalculated, limiting the sample to just those indicated to be clinical problem gamblers (PGSI>7, n=32). This provided greater representation for pathway 3 (34.38%), though pathway 2 still displayed under representation (9.38%). Moderation regression analyses was attempted using both the whole sample, and just those indicated to be problem gamblers. Plotting the moderation analyses of the whole sample indicated an interaction effect between gambling severity and gambling pathways 1 and 3 via non-parallel interaction slopes. Pathway 2 also demonstrated a non-parallel slope coefficient, however no conclusions should be drawn due to the low sample representation (n= 5). 
+
+```{r}
+ggplot(DSC, aes(x = PGSI, y = SM, color = GP)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE) +
+  labs(title = "Gambling Severity and Pathway on Meaning Seeking", x = "Gambling Severity", y = "Meaning Seeking", color = "Gambling Pathway") +theme_apa(box = TRUE)
+```
+However, the moderation regression model for this interaction demonstrated non-significant interaction effects:
+```{r include=FALSE}
+SMPGMOD <- lm(SM ~ PGSI*GP, data = DSC) 
+#summary(SMPGMOD)
+#gvlma(SMPGMOD)
+#plot(SMPGMOD)
+apa.reg.table(SMPGMOD)
+#apa.reg.table(SMPGMOD, filename = "SMPGMOD.doc",table.number = 7)
+```
+##INSERT SMPGMOD.doc HERE
+
+Moderation regression model for just indicated problem gamblers provided a scatterplot with the same visual indication, however the attempted model demonstrated non-significant fit (F(:5, 26)=0.25, p=.94) and explained negligible variance (adj r^2=-0.14 ). these findings are potentially a result of insufficient power given the small smaple size (n=32).
+
+```{r}
+ggplot(PGDS, aes(x = PGSI, y = SM, color = GP)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE) +
+  labs(title = "Gambling Severity and Pathway on Meaning Seeking", x = "Gambling Severity", y = "Meaning Seeking", color = "Gambling Pathway") +theme_apa(box = TRUE)
+```
+
+```{r include=FALSE}
+PGMO <- lm(SM ~ PGSI*GP, data = PGDS) 
+#summary(PGMO)
+#gvlma(PGMO)
+
+apa.reg.table(PGMO)
+#apa.reg.table(PGMO, filename = "PGMO.doc",table.number = 8)
+```
+
+##INSERT PGMO.doc HERE
+
+Hypothesis 3: Assessing mediation effects of non gambling activity enjoyment (EROS) between gambling severity and meaning seeking. 
+
+Based upon the previously established linear regression model defining the association between gambling severity and meaning seeking, a multiple regression model was calculated, assessing the association between EROS and PGSI on SM.
+
+```{r include=FALSE}
+#creating secondary data frame for established sample, & renaming variables for a tidier pathway model.  
+
+DSC2 <- DSC[-c(53, 101, 104, 12, 188, 172), ]
+
+DSC2 <- DSC2 %>% rename(
+  `PGSIraw` = `PGSI`,
+  `PGSI` = `PGSItrans`)
+```
+
+```{r include=FALSE}
+#summary(lmSMPG3)
+
+SMPGEROS <- lm(SM ~ PGSI + EROS, data = DSC2)
+summary(SMPGEROS)
+apa.reg.table(SMPGEROS)
+#apa.reg.table(SMPGEROS, filename = "SMPGEROS.doc", table.number = 9)
+```
+##INSERT SMPGEROS.doc HERE  
+
+This analysis demonstrated a significant negative association between EROS and meaning seeking behavior. Additionally, when controlling for EROS scores, the association between gambling severity and meaning seeking lost significance (p=.38), indicating a potential mediation effect. This was tested via multiple regression mediation model: 
+```{r}
+PGEROSSMmed <- psych::mediate(SM ~ PGSI + (EROS), data =DSC2)
+
+#print(PGEROSSMmed, short=FALSE)
+psych::diagram(PGEROSSMmed)
+#gvlmaPGEROSSMmed)
+```
+
+The DV (Y) was SM . The IV (X) was PGSI . The mediating variable(s) = EROS.
+Total effect(c) of PGSI on SM = 0.9, S.E. = 0.33 t = 2.71 df= 187 with p = 0.0074. Direct effect (c’) of PGSI on SM, removing EROS = 0.29, S.E. = 0.33 (t(2, 186)=0.88, p = 0.38). 
+Indirect effect (ab) of PGSI on SM through EROS = 0.61 Mean bootstrapped indirect effect = 0.61 with standard error = 0.18 Lower CI = 0.31 Upper CI = 0.99 
+R = 0.42 R2 = 0.17 F(2, 186)=19.56, p<.001
+
+Mediation analysis indicated full mediation of the association between gambling severity and meaning seeking via non-gambling enjoyment. 
+
+Exploratory analyses:
+
+Assessing mediation of association between gambling severity and presence of meaning via non-gambling related enjoyment.
+
+As the previous analysis indicated a full mediation effect for meaning seeking behaviour, assessment for potential mediation for presence of meaning was also of interest, particularly as this would align with both Frankl's EV theory and the theory of alternate reinforcement.    
+
+This analysis was also based from the previously established linear regression model assessing association between gambling severity and presence of meaning. As such, a multiple regression analysis was performed, utilising square root transformed PM scores and PGSI data, whilst controlling for non-gambling enjoyment (EROS). This model demonstrated similar findings in that when controlling for EROS, the association between PGSI and PM lost significance, indicating a mediation effect. 
+
+##INSERT PGEROSPM.doc HERE
+
+```{r include=FALSE}
+lmPMPG3 #lm(PMtrans ~ sqrt(PGSI), data = DSC[-c(76, 108, 146, 101, 125, 149), ])
+LMPMER<- lm(PMtrans ~ EROS, data = DSC2)
+
+PGEROSPM <- lm(PMtrans ~ PGSI + EROS, data = DSC2)
+
+#apa.reg.table(PGEROSPM)
+#apa.reg.table(PGEROSPM, filename = "PGEROSPM.doc", table.number = 10)
+#summary(PGEROSPM)
+#gvlma(PGEROSPM)
+
+PGEROSPMmed <-  psych::mediate(PMtrans ~ PGSI + (EROS), data = DSC2)
+```
+
+Mediated multiple regression analysis, demonstrated a full mediation effect of gambling on the presence of meaning via non-gambling enjoyment. 
+
+The DV (Y) was  PM . The IV (X) was  PGSI . The mediating variable(s) =  EROS .
+
+Total effect(c) of  PGSI  on  PM  =  -0.18   S.E. =  0.06  t  =  -3.03  df=  187   with p =  0.0028
+Direct effect (c') of  PGSI  on  PM  removing  EROS  =  0.04   S.E. =  0.04  t  =  1.05  df=  186   with p =  0.3
+Indirect effect (ab) of  PGSI  on  PM  through  EROS   =  -0.23 
+Mean bootstrapped indirect effect =  -0.23  with standard error =  0.05  Lower CI =  -0.32    Upper CI =  -0.13
+R = 0.78 R2 = 0.6   F = 141.91 on 2 and 186 DF   p-value:  7.51e-48 
+
+```{r}
+psych::diagram(PGEROSPMmed)
+```
